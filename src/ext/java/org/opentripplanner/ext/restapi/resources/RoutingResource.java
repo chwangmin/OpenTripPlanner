@@ -703,15 +703,27 @@ public abstract class RoutingResource {
    *
    * @param queryParameters incoming request parameters
    */
-  protected RouteRequest buildRequest(MultivaluedMap<String, String> queryParameters) {
-    final RouteRequest request = defaultRouteRequest();
+  protected List<RouteRequest> buildRequests(MultivaluedMap<String, String> queryParameters) {
+    List<RouteRequest> requests = new ArrayList<>();
+    List<String> fromPlaces = queryParameters.get("fromPlace");
+    List<String> toPlaces = queryParameters.get("toPlace");
 
-    // The routing request should already contain defaults, which are set when it is initialized or
-    // in the JSON router configuration and cloned. We check whether each parameter was supplied
-    // before overwriting the default.
-    setIfNotNull(fromPlace, it -> request.setFrom(fromOldStyleString(it)));
-    setIfNotNull(toPlace, it -> request.setTo(fromOldStyleString(it)));
+    if (fromPlaces == null || toPlaces == null || fromPlaces.size() != toPlaces.size()) {
+      throw new IllegalArgumentException("The number of fromPlace and toPlace parameters must be equal and non-null.");
+    }
 
+    for (int i = 0; i < fromPlaces.size(); i++) {
+      RouteRequest request = defaultRouteRequest();
+      request.setFrom(fromOldStyleString(fromPlaces.get(i)));
+      request.setTo(fromOldStyleString(toPlaces.get(i)));
+      populateRequestParameters(queryParameters, request);
+      requests.add(request);
+    }
+
+    return requests;
+  }
+
+  private void populateRequestParameters(MultivaluedMap<String, String> queryParameters, RouteRequest request) {
     {
       //FIXME: move into setter method on routing request
       ZoneId tz = ZoneIdFallback.zoneId(serverContext.transitService().getTimeZone());
@@ -838,7 +850,6 @@ public abstract class RoutingResource {
         }
       }
     });
-    return request;
   }
 
   /**

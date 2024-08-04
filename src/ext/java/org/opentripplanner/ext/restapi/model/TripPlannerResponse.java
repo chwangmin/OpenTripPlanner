@@ -1,6 +1,7 @@
 package org.opentripplanner.ext.restapi.model;
 
 import jakarta.ws.rs.core.UriInfo;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map.Entry;
@@ -12,7 +13,7 @@ public class TripPlannerResponse {
 
   /** A dictionary of the parameters provided in the request that triggered this response. */
   public HashMap<String, String> requestParameters;
-  private ApiTripPlan plan;
+  private List<ApiTripPlan> plans = new ArrayList<>();
   private ApiTripSearchMetadata metadata;
   private String previousPageCursor;
   private String nextPageCursor;
@@ -46,12 +47,12 @@ public class TripPlannerResponse {
   // is request params, followed by plan, followed by errors.
 
   /** The actual trip plan. */
-  public ApiTripPlan getPlan() {
-    return plan;
+  public List<ApiTripPlan> getPlans() {
+    return plans;
   }
 
-  public void setPlan(ApiTripPlan plan) {
-    this.plan = plan;
+  public void addPlan(ApiTripPlan plan) {
+    this.plans.add(plan);
   }
 
   /**

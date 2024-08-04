@@ -24,6 +24,9 @@ import org.opentripplanner.routing.error.RoutingValidationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * This is the primary entry point for the trip planning web service. All parameters are passed in
  * the query string. These parameters are defined as fields in the abstract RoutingResource
@@ -33,67 +36,61 @@ import org.slf4j.LoggerFactory;
  * singleton-scoped (a single instance existing for the lifetime of the OTP server).
  */
 @Path("routers/{ignoreRouterId}/plan")
-// final element needed here rather than on method to distinguish from routers API
 public class PlannerResource extends RoutingResource {
 
   private static final Logger LOG = LoggerFactory.getLogger(PlannerResource.class);
 
-  /**
-   * @deprecated The support for multiple routers are removed from OTP2. See
-   * https://github.com/opentripplanner/OpenTripPlanner/issues/2760
-   */
   @Deprecated
   @PathParam("ignoreRouterId")
   private String ignoreRouterId;
 
-  // We inject info about the incoming request so we can include the incoming query
-  // parameters in the outgoing response. This is a TriMet requirement.
-  // Jersey uses @Context to inject internal types and @InjectParam or @Resource for DI objects.
   @GET
   @Produces(MediaType.APPLICATION_JSON)
   public Response plan(@Context UriInfo uriInfo, @Context Request grizzlyRequest) {
-    /*
-     * TODO: add Lang / Locale parameter, and thus get localized content (Messages & more...)
-     * TODO: from/to inputs should be converted / geocoded / etc... here, and maybe send coords
-     *       or vertex ids to planner (or error back to user)
-     * TODO: org.opentripplanner.routing.module.PathServiceImpl has COOORD parsing. Abstract that
-     *       out so it's used here too...
-     */
-
-    // Create response object, containing a copy of all request parameters. Maybe they should be in the debug section of the response.
     TripPlannerResponse response = new TripPlannerResponse(uriInfo);
-    RouteRequest request = null;
-    RoutingResponse res = null;
+    List<RouteRequest> requests = new ArrayList<>();
     try {
-      /* Fill in request fields from query parameters via shared superclass method, catching any errors. */
-      request = super.buildRequest(uriInfo.getQueryParameters());
+      // 여러 fromPlace와 toPlace를 처리
+      List<String> fromPlaces = uriInfo.getQueryParameters().get("fromPlace");
+      List<String> toPlaces = uriInfo.getQueryParameters().get("toPlace");
 
-      // Route
-      res = serverContext.routingService().route(request);
-
-      // Map to API
-      // TODO VIA (Leonard) - we should store the default showIntermediateStops somewhere
-      TripPlanMapper tripPlanMapper = new TripPlanMapper(request.locale(), showIntermediateStops);
-      response.setPlan(tripPlanMapper.mapTripPlan(res.getTripPlan()));
-      if (res.getPreviousPageCursor() != null) {
-        response.setPreviousPageCursor(res.getPreviousPageCursor().encode());
-      }
-      if (res.getNextPageCursor() != null) {
-        response.setNextPageCursor(res.getNextPageCursor().encode());
-      }
-      response.setMetadata(TripSearchMetadataMapper.mapTripSearchMetadata(res.getMetadata()));
-      if (!res.getRoutingErrors().isEmpty()) {
-        // The api can only return one error message, so the first one is mapped
-        response.setError(PlannerErrorMapper.mapMessage(res.getRoutingErrors().get(0)));
+      if (fromPlaces == null || toPlaces == null || fromPlaces.size() != toPlaces.size()) {
+        response.setError(new PlannerError(Message.SYSTEM_ERROR));
+        return Response.status(Response.Status.BAD_REQUEST).entity(response).build();
       }
 
-      /* Populate up the elevation metadata */
+      for (int i = 0; i < fromPlaces.size(); i++) {
+        String fromPlace = fromPlaces.get(i);
+        String toPlace = toPlaces.get(i);
+        RouteRequest request = super.buildRequestForPlaces(uriInfo, fromPlace, toPlace);
+        requests.add(request);
+      }
+
+      // 각 요청에 대해 경로 계획 수행
+      for (RouteRequest request : requests) {
+        RoutingResponse res = serverContext.routingService().route(request);
+
+        // Map to API
+        TripPlanMapper tripPlanMapper = new TripPlanMapper(request.locale(), showIntermediateStops);
+        response.addPlan(tripPlanMapper.mapTripPlan(res.getTripPlan()));
+
+        if (res.getPreviousPageCursor() != null) {
+          response.setPreviousPageCursor(res.getPreviousPageCursor().encode());
+        }
+        if (res.getNextPageCursor() != null) {
+          response.setNextPageCursor(res.getNextPageCursor().encode());
+        }
+        response.setMetadata(TripSearchMetadataMapper.mapTripSearchMetadata(res.getMetadata()));
+        if (!res.getRoutingErrors().isEmpty()) {
+          response.setError(PlannerErrorMapper.mapMessage(res.getRoutingErrors().get(0)));
+        }
+        response.debugOutput = res.getDebugTimingAggregator().finishedRendering();
+      }
+
       response.elevationMetadata = new ElevationMetadata();
-      response.elevationMetadata.ellipsoidToGeoidDifference =
-        serverContext.graph().ellipsoidToGeoidDifference;
-      response.elevationMetadata.geoidElevation = request.preferences().system().geoidElevation();
+      response.elevationMetadata.ellipsoidToGeoidDifference = serverContext.graph().ellipsoidToGeoidDifference;
+      response.elevationMetadata.geoidElevation = requests.get(0).preferences().system().geoidElevation();
 
-      response.debugOutput = res.getDebugTimingAggregator().finishedRendering();
     } catch (RoutingValidationException e) {
       if (e.isFromToLocationNotFound()) {
         response.setError(new PlannerError(Message.GEOCODE_FROM_TO_NOT_FOUND));
